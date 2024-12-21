@@ -47,13 +47,118 @@ def classify_events(articles: List[Dict[str, Any]]) -> str:
     
     # Define event keywords
     event_patterns = {
-        'earnings': r'earnings|revenue|profit|loss|quarterly|financial results',
-        'merger_acquisition': r'merger|acquisition|takeover|deal|buyout',
-        'management_change': r'CEO|executive|management|leadership|appointed|resigned',
-        'product_launch': r'launch|release|announce|new product|innovation',
-        'legal': r'lawsuit|legal|court|settlement|regulatory',
-        'market_movement': r'market|stock|shares|trading|investors'
+        'earnings': (
+            r'\bearnings?\b|'
+            r'\brevenue\b|'
+            r'\bprofit\b|'
+            r'\bloss(es)?\b|'
+            r'\bquarterly\b|'
+            r'\bfinancial\s+results?\b|'
+            r'\bguidance\b|'
+            r'\bEPS\b|'
+            r'\bforecasts?\b|'
+            r'\bestimates?\b|'
+            r'\boutlook\b|'
+            r'\bfiscal\b|'
+            r'\bpreliminary\s+(results?|figures?)\b'
+        ),
+        'merger_acquisition': (
+            r'\bmerger\b|'
+            r'\bacquisition\b|'
+            r'\btakeover\b|'
+            r'\bdeal\b|'
+            r'\bbuyout\b|'
+            r'\bbid\b|'
+            r'\bM&A\b|'
+            r'\bjoint\s+venture\b|'
+            r'\ball-cash\s+deal\b|'
+            r'\bshare-swap\b|'
+            r'\bconsolidation\b|'
+            r'\bstrategic\s+(partnership|alliance)\b|'
+            r'\bintegration\b'
+        ),
+        'management_change': (
+            r'\bCEO\b|'
+            r'\bCFO\b|'
+            r'\bCOO\b|'
+            r'\bexecutive\b|'
+            r'\bmanagement\b|'
+            r'\bleadership\b|'
+            r'\bappointed\b|'
+            r'\bresigned\b|'
+            r'\bboard\s+of\s+directors?\b|'
+            r'\bchairman\b|'
+            r'\bchairwoman\b|'
+            r'\bfired\b|'
+            r'\bhired\b|'
+            r'\bsuccession\b|'
+            r'\bexecutive\s+change\b|'
+            r'\bexecutive\s+shuffle\b|'
+            r'\bstepping\s+down\b|'
+            r'\bnew\s+management\b|'
+            r'\binterim\s+(CEO|CFO|COO)\b'
+        ),
+        'product_launch': (
+            r'\blaunch(ed|ing)?\b|'
+            r'\brelease(d|ing)?\b|'
+            r'\bannounce(d|ment)?\b|'
+            r'\bnew\s+product\b|'
+            r'\binnovation\b|'
+            r'\bunveil(ed|ing)?\b|'
+            r'\bintroduce(d|ing)?\b|'
+            r'\broll(\s?out|ing\s+out)\b|'
+            r'\bupdate(d|s)?\b|'
+            r'\bfeature(s)?\b|'
+            r'\bproduct\s+line\b|'
+            r'\bproduct\s+portfolio\b|'
+            r'\bR&D\b|'
+            r'\bprototype\b|'
+            r'\bupgrad(ed|ing)?\b'
+        ),
+        'legal': (
+            r'\blawsuit(s)?\b|'
+            r'\blegal\b|'
+            r'\bcourt\b|'
+            r'\bsettlement(s)?\b|'
+            r'\bregulatory\b|'
+            r'\bfine(s)?\b|'
+            r'\binvestigation(s)?\b|'
+            r'\bcomplaint(s)?\b|'
+            r'\blitigation\b|'
+            r'\bantitrust\b|'
+            r'\bcompliance\b|'
+            r'\bfraud\b|'
+            r'\bSEC\b|'
+            r'\bDOJ\b|'
+            r'\bclass\s+action\b|'
+            r'\bpatent\s+dispute\b|'
+            r'\bwhistleblower\b|'
+            r'\bsettle(d|ing)?\b'
+        ),
+        'market_movement': (
+            r'\bmarket(s)?\b|'
+            r'\bstock(s)?\b|'
+            r'\bshare(s)?\b|'
+            r'\btrading\b|'
+            r'\binvestors?\b|'
+            r'\bIPO\b|'
+            r'\blisting\b|'
+            r'\bvaluation\b|'
+            r'\bmarket\s+cap\b|'
+            r'\bprice\s+target\b|'
+            r'\bupgrade(d)?\b|'
+            r'\bdowngrade(d)?\b|'
+            r'\banalyst\s+report\b|'
+            r'\bdividend(s)?\b|'
+            r'\bbuyback(s)?\b|'
+            r'\bshort\s+selling\b|'
+            r'\bvolatility\b|'
+            r'\bindex\s+inclusion\b|'
+            r'\bindex\s+removal\b|'
+            r'\brating(s)?\b'
+        )
     }
+
     
     event_counts = Counter()
     
