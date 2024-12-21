@@ -4,36 +4,39 @@ FROM python:3.10-slim
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PIP_NO_CACHE_DIR=1 \
-    PIP_DISABLE_PIP_VERSION_CHECK=1
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    POETRY_VERSION=1.4.2
 
 # Set working directory
 WORKDIR /app
 
 # Install system dependencies
-RUN apt-get update && \
-    apt-get install -y --no-install-recommends \
+RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     curl \
+    git \
+    libpq-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy requirements first to leverage Docker cache
+# Copy requirements file
 COPY requirements.txt .
+
+# Install Python dependencies
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy the rest of the application
-COPY . .
-
-# Install the package
-RUN pip install -e .
+# Download NLTK data
+RUN python -c "import nltk; nltk.download('vader_lexicon')"
 
 # Create non-root user
-RUN useradd -m msto && \
+RUN useradd -m -u 1000 msto && \
     chown -R msto:msto /app
+
+# Copy application code
+COPY . .
+
+# Switch to non-root user
 USER msto
 
-# Create directories for logs and data
-RUN mkdir -p /app/logs /app/data
-
-# Default command
-ENTRYPOINT ["msto"]
+# Set entry point and default command
+ENTRYPOINT ["python", "-m", "msto.cli"]
 CMD ["--help"] 

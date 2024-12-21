@@ -1,208 +1,221 @@
-import datetime
-import logging
 import json
-import concurrent.futures
+import logging
+import threading
 import time
-from typing import List, Dict, Set
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from typing import List, Dict, Any, Optional
 
-from msto.utils.config import load_config
-from msto.core.data_sources import fetch_stock_data, fetch_news, get_fundamental_metrics
-from msto.core.analytics import detect_unusual_drop, sentiment_analysis, classify_events, estimate_impact
+from msto.core.analytics import (
+    detect_unusual_drop,
+    sentiment_analysis,
+    classify_events,
+    estimate_impact
+)
+from msto.core.data_sources import (
+    fetch_stock_data,
+    fetch_news,
+    get_fundamental_metrics
+)
 from msto.core.execution import TradingViewIntegration
-from msto.core.health import start_health_server, update_health_status
+from msto.core.health import HealthCheckHandler
+from msto.core.health_server import start_health_server
 from msto.strategies.base import Strategy
+from msto.utils.config import load_config
 
 logger = logging.getLogger(__name__)
 
 class Orchestrator:
-    def __init__(self, strategies: List[Strategy]):
+    """Orchestrates the processing of tickers and execution of strategies."""
+
+    def __init__(
+        self,
+        strategies: List[Strategy],
+        config: Optional[Dict[str, Any]] = None,
+        health_port: int = 8080
+    ):
         """
-        Initialize orchestrator with multiple strategies (like multiple microservices).
+        Initialize the orchestrator.
+
+        Args:
+            strategies: List of trading strategies to use
+            config: Optional configuration dictionary
+            health_port: Port for health check server
         """
         self.strategies = strategies
-        self.executor = TradingViewIntegration()
-        self.config = load_config()
-        self.drop_lookback_days = int(self.config["DROP_LOOKBACK_DAYS"])
-        self.check_interval = int(self.config.get("CHECK_INTERVAL_SECONDS", 300))
-        self.processed_signals: Dict[str, Set[str]] = {}
-        self.max_signals_per_ticker = int(self.config.get("MAX_SIGNALS_PER_TICKER", 3))
-        self.health_port = int(self.config.get("HEALTH_CHECK_PORT", 8080))
-        self.health_server = None
+        self.config = config or load_config()
+        self.executor = ThreadPoolExecutor(
+            max_workers=int(self.config.get("PARALLEL_WORKERS", 4))
+        )
+        self.trading_view = TradingViewIntegration(
+            self.config.get("TRADINGVIEW_WEBHOOK_URL")
+        )
+        self.health_handler = HealthCheckHandler()
+        self.health_server = start_health_server(self.health_handler, health_port)
+        self.running = False
+        self._lock = threading.Lock()
 
-    def start_monitoring(self, tickers: List[str]):
+    def start(self, tickers: List[str], interval: int = 300):
         """
-        Start continuous monitoring of the given tickers.
-        
+        Start processing tickers.
+
         Args:
             tickers: List of stock tickers to monitor
+            interval: Time between checks in seconds
         """
-        # Start health check server
-        self.health_server = start_health_server(self.health_port)
-        update_health_status("starting")
-        
         logger.info(json.dumps({
             "level": "INFO",
-            "message": "Starting continuous monitoring",
+            "message": "Starting ticker processing",
             "tickers": tickers,
-            "check_interval": self.check_interval
+            "interval": interval
         }))
-        
-        try:
-            update_health_status("healthy")
-            while True:
-                try:
-                    self.process_all_tickers(tickers)
-                    time.sleep(self.check_interval)
-                except Exception as e:
-                    logger.error(json.dumps({
-                        "level": "ERROR",
-                        "message": "Error in monitoring loop",
-                        "error": str(e)
-                    }))
-                    update_health_status("unhealthy", str(e))
-                    # Continue monitoring despite errors
-                    time.sleep(self.check_interval)
-                    
-        except KeyboardInterrupt:
-            logger.info(json.dumps({
-                "level": "INFO",
-                "message": "Monitoring stopped by user"
-            }))
-            update_health_status("stopping")
-        finally:
-            if self.health_server:
-                self.health_server.shutdown()
 
-    def process_all_tickers(self, tickers: List[str]):
-        """Process all tickers in parallel."""
-        max_workers = min(len(tickers), int(self.config.get("MAX_PARALLEL_TICKERS", 10)))
-        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
-            futures = {executor.submit(self.process_ticker, ticker): ticker for ticker in tickers}
-            for future in concurrent.futures.as_completed(futures):
-                ticker = futures[future]
-                try:
-                    future.result()
-                except Exception as e:
-                    logger.error(json.dumps({
-                        "level": "ERROR",
-                        "message": "Error processing ticker",
-                        "ticker": ticker,
-                        "error": str(e)
-                    }))
+        self.running = True
+        while self.running:
+            try:
+                futures = []
+                for ticker in tickers:
+                    future = self.executor.submit(self.process_ticker, ticker)
+                    futures.append(future)
 
-    def process_ticker(self, ticker: str):
-        """Process a single ticker and generate trading signals."""
+                for future in as_completed(futures):
+                    try:
+                        future.result()
+                    except Exception as e:
+                        logger.error(json.dumps({
+                            "level": "ERROR",
+                            "message": "Error processing ticker",
+                            "error": str(e)
+                        }))
+                        self.health_handler.record_error()
+
+                time.sleep(interval)
+            except Exception as e:
+                logger.error(json.dumps({
+                    "level": "ERROR",
+                    "message": "Error in processing loop",
+                    "error": str(e)
+                }))
+                self.health_handler.record_error()
+
+    def stop(self):
+        """Stop processing tickers."""
         logger.info(json.dumps({
             "level": "INFO",
-            "message": "Processing ticker",
-            "ticker": ticker,
-            "timestamp": datetime.datetime.now().isoformat()
+            "message": "Stopping ticker processing"
         }))
+        self.running = False
+        self.executor.shutdown(wait=True)
+        self.health_server.shutdown()
 
-        # Initialize signal tracking for this ticker if not exists
-        if ticker not in self.processed_signals:
-            self.processed_signals[ticker] = set()
+    def process_ticker(self, ticker: str) -> None:
+        """
+        Process a single ticker.
 
-        # Check if market is open (if configured)
-        if self.config.get("MARKET_HOURS_ONLY", "true").lower() == "true":
-            if not self._is_market_open():
-                logger.debug(json.dumps({
-                    "level": "DEBUG",
-                    "message": "Market is closed",
-                    "ticker": ticker
-                }))
-                return
-
-        # Fetch and validate data
-        data = fetch_stock_data(ticker, self.drop_lookback_days)
-        if data.empty:
+        Args:
+            ticker: Stock ticker symbol
+        """
+        try:
             logger.info(json.dumps({
                 "level": "INFO",
-                "message": "No data for ticker",
+                "message": "Processing ticker",
                 "ticker": ticker
             }))
-            return
 
-        drop = detect_unusual_drop(data)
-        if drop is None:
-            logger.debug(json.dumps({
-                "level": "DEBUG",
-                "message": "No unusual drop detected",
-                "ticker": ticker
+            # Fetch data
+            stock_data = fetch_stock_data(ticker)
+            news_data = fetch_news(ticker)
+            fundamental_data = get_fundamental_metrics(ticker)
+
+            # Analyze data
+            drop = detect_unusual_drop(stock_data)
+            sentiment = sentiment_analysis(news_data)
+            events = classify_events(news_data)
+            impact = estimate_impact(events, sentiment)
+
+            # Prepare processed data
+            processed_data = {
+                "ticker": ticker,
+                "drop": drop,
+                "sentiment": sentiment,
+                "events": events,
+                "impact": impact,
+                "fundamentals": fundamental_data,
+                "stock_data": stock_data
+            }
+
+            # Process strategies
+            signals = self._process_strategies(processed_data)
+
+            # Execute signals
+            if signals:
+                self._execute_signals(signals)
+                self.health_handler.increment_signals()
+
+            logger.info(json.dumps({
+                "level": "INFO",
+                "message": "Ticker processed successfully",
+                "ticker": ticker,
+                "signals_generated": len(signals) if signals else 0
             }))
-            return
 
-        # Gather market data
-        today = datetime.date.today()
-        from_date = today - datetime.timedelta(days=2)
-        articles = fetch_news(ticker, from_date, today)
+        except Exception as e:
+            logger.error(json.dumps({
+                "level": "ERROR",
+                "message": "Error processing ticker",
+                "ticker": ticker,
+                "error": str(e)
+            }))
+            self.health_handler.record_error()
+            raise
 
-        avg_sent = sentiment_analysis(articles)
-        event_type = classify_events(articles)
-        fundamentals = get_fundamental_metrics(ticker)
-        impact = estimate_impact(avg_sent, event_type)
+    def _process_strategies(self, data: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """
+        Process all strategies with the given data.
 
-        processed_data = {
-            "ticker": ticker,
-            "drop": drop,
-            "avg_sentiment": avg_sent,
-            "most_common_event": event_type,
-            "fundamentals": fundamentals,
-            "impact": impact,
-            "timestamp": datetime.datetime.now().isoformat()
-        }
+        Args:
+            data: Processed market data
 
-        # Run strategies in parallel
+        Returns:
+            List of generated trading signals
+        """
         all_signals = []
-        with concurrent.futures.ThreadPoolExecutor(max_workers=len(self.strategies)) as executor:
-            future_to_strategy = {executor.submit(s.process_data, processed_data): s for s in self.strategies}
-            for future in concurrent.futures.as_completed(future_to_strategy):
-                strategy_obj = future_to_strategy[future]
+        for strategy in self.strategies:
+            try:
+                signals = strategy.process_data(data)
+                if signals:
+                    all_signals.extend(signals)
+            except Exception as e:
+                logger.error(json.dumps({
+                    "level": "ERROR",
+                    "message": "Strategy processing error",
+                    "strategy": strategy.__class__.__name__,
+                    "error": str(e)
+                }))
+                self.health_handler.record_error()
+
+        return all_signals
+
+    def _execute_signals(self, signals: List[Dict[str, Any]]) -> None:
+        """
+        Execute the generated trading signals.
+
+        Args:
+            signals: List of trading signals to execute
+        """
+        with self._lock:
+            for signal in signals:
                 try:
-                    signals = future.result()
-                    if signals:
-                        # Filter out already processed signals
-                        new_signals = []
-                        for signal in signals:
-                            signal_id = f"{signal['strategy']}_{signal['action']}_{signal['quantity']}"
-                            if signal_id not in self.processed_signals[ticker]:
-                                if len(self.processed_signals[ticker]) < self.max_signals_per_ticker:
-                                    self.processed_signals[ticker].add(signal_id)
-                                    new_signals.append(signal)
-                                else:
-                                    logger.warning(json.dumps({
-                                        "level": "WARNING",
-                                        "message": "Maximum signals reached for ticker",
-                                        "ticker": ticker,
-                                        "max_signals": self.max_signals_per_ticker
-                                    }))
-                        all_signals.extend(new_signals)
+                    self.trading_view.execute_signal(signal)
+                    logger.info(json.dumps({
+                        "level": "INFO",
+                        "message": "Signal executed",
+                        "signal": signal
+                    }))
                 except Exception as e:
                     logger.error(json.dumps({
                         "level": "ERROR",
-                        "message": "Strategy processing error",
-                        "strategy": strategy_obj.__class__.__name__,
+                        "message": "Signal execution error",
+                        "signal": signal,
                         "error": str(e)
                     }))
-
-        # Execute new signals
-        if all_signals:
-            self.executor.execute_signals(all_signals)
-
-    def reset_signal_tracking(self, ticker: str = None):
-        """Reset signal tracking for a specific ticker or all tickers."""
-        if ticker:
-            self.processed_signals[ticker] = set()
-        else:
-            self.processed_signals.clear()
-
-    def _is_market_open(self) -> bool:
-        """Check if the market is currently open."""
-        now = datetime.datetime.now()
-        # Basic check for US market hours (9:30 AM - 4:00 PM ET)
-        # TODO: Add proper market calendar integration
-        if now.weekday() >= 5:  # Weekend
-            return False
-        market_open = now.replace(hour=9, minute=30, second=0, microsecond=0)
-        market_close = now.replace(hour=16, minute=0, second=0, microsecond=0)
-        return market_open <= now <= market_close
+                    self.health_handler.record_error()

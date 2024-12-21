@@ -1,11 +1,11 @@
 {
-    "family": "msto",
+    "family": "msto-task",
     "networkMode": "awsvpc",
     "requiresCompatibilities": ["FARGATE"],
-    "cpu": "512",
-    "memory": "1024",
+    "cpu": "1024",
+    "memory": "2048",
     "executionRoleArn": "arn:aws:iam::${AWS_ACCOUNT_ID}:role/ecsTaskExecutionRole",
-    "taskRoleArn": "arn:aws:iam::${AWS_ACCOUNT_ID}:role/msto-task-role",
+    "taskRoleArn": "arn:aws:iam::${AWS_ACCOUNT_ID}:role/ecsTaskRole",
     "containerDefinitions": [
         {
             "name": "msto",
@@ -21,6 +21,10 @@
                 {
                     "name": "ENV",
                     "value": "prod"
+                },
+                {
+                    "name": "TRADING_MODE",
+                    "value": "paper"
                 }
             ],
             "secrets": [
@@ -42,15 +46,64 @@
                 "options": {
                     "awslogs-group": "/ecs/msto",
                     "awslogs-region": "${AWS_REGION}",
-                    "awslogs-stream-prefix": "ecs"
+                    "awslogs-stream-prefix": "msto",
+                    "awslogs-create-group": "true"
                 }
             },
+            "mountPoints": [
+                {
+                    "sourceVolume": "data",
+                    "containerPath": "/app/data",
+                    "readOnly": false
+                },
+                {
+                    "sourceVolume": "logs",
+                    "containerPath": "/app/logs",
+                    "readOnly": false
+                }
+            ],
             "healthCheck": {
-                "command": ["CMD-SHELL", "curl -f http://localhost:8080/health || exit 1"],
+                "command": [
+                    "CMD-SHELL",
+                    "curl -f http://localhost:8080/health || exit 1"
+                ],
                 "interval": 30,
                 "timeout": 5,
                 "retries": 3,
                 "startPeriod": 60
+            },
+            "ulimits": [
+                {
+                    "name": "nofile",
+                    "softLimit": 65536,
+                    "hardLimit": 65536
+                }
+            ]
+        }
+    ],
+    "volumes": [
+        {
+            "name": "data",
+            "efsVolumeConfiguration": {
+                "fileSystemId": "${EFS_FILESYSTEM_ID}",
+                "rootDirectory": "/data",
+                "transitEncryption": "ENABLED",
+                "authorizationConfig": {
+                    "accessPointId": "${EFS_ACCESS_POINT_ID}",
+                    "iam": "ENABLED"
+                }
+            }
+        },
+        {
+            "name": "logs",
+            "efsVolumeConfiguration": {
+                "fileSystemId": "${EFS_FILESYSTEM_ID}",
+                "rootDirectory": "/logs",
+                "transitEncryption": "ENABLED",
+                "authorizationConfig": {
+                    "accessPointId": "${EFS_ACCESS_POINT_ID}",
+                    "iam": "ENABLED"
+                }
             }
         }
     ]
