@@ -8,6 +8,7 @@ from typing import List, Optional
 import json
 
 from msto.core.orchestrator import Orchestrator
+from msto.strategies.base import Strategy
 from msto.strategies.fundamental_event_driven import FundamentalEventDrivenStrategy
 from msto.strategies.simple_volatility import SimpleVolatilityStrategy
 from msto.utils.config import load_config
@@ -48,14 +49,6 @@ def parse_args(args: Optional[List[str]] = None) -> argparse.Namespace:
         choices=["fundamental", "volatility", "all"],
         default=["all"],
         help="Strategies to use (default: all)",
-    )
-    
-    parser.add_argument(
-        "--mode",
-        type=str,
-        choices=["continuous", "once"],
-        default="continuous",
-        help="Run mode: continuous monitoring or one-time check (default: continuous)",
     )
     
     parser.add_argument(
@@ -116,17 +109,17 @@ def get_strategies(config: dict, selected_strategies: List[str]) -> List[Strateg
     for name in strategy_names:
         if name in all_strategies:
             strategies.append(all_strategies[name]())
-    
+
     return strategies
 
 def main(args: Optional[List[str]] = None) -> int:
     """Main entry point for the CLI."""
     parsed_args = parse_args(args)
-    setup_logging(parsed_args.log_level)
-    
+
     try:
         # Update configuration with CLI arguments
         config = load_config(parsed_args.config)
+        setup_logging(config["LOG_LEVEL"])
         config["CHECK_INTERVAL_SECONDS"] = parsed_args.interval
         config["MAX_SIGNALS_PER_TICKER"] = parsed_args.max_signals
         
@@ -143,18 +136,13 @@ def main(args: Optional[List[str]] = None) -> int:
         logger.info(json.dumps({
             "level": "INFO",
             "message": "Starting MSTO",
-            "mode": parsed_args.mode,
             "tickers": parsed_args.tickers,
             "strategies": parsed_args.strategies,
-            "interval": parsed_args.interval if parsed_args.mode == "continuous" else None
+            "interval": parsed_args.interval
         }))
         
-        # Run in selected mode
-        if parsed_args.mode == "continuous":
-            orchestrator.start_monitoring(parsed_args.tickers)
-        else:
-            orchestrator.process_all_tickers(parsed_args.tickers)
-            
+        orchestrator.start(parsed_args.tickers)
+
         return 0
         
     except KeyboardInterrupt:

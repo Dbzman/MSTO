@@ -46,9 +46,7 @@ class Orchestrator:
         self.executor = ThreadPoolExecutor(
             max_workers=int(self.config.get("PARALLEL_WORKERS", 4))
         )
-        self.trading_view = TradingViewIntegration(
-            self.config.get("TRADINGVIEW_WEBHOOK_URL")
-        )
+        self.trading_view = TradingViewIntegration()
         self.health_handler = HealthCheckHandler()
         self.health_server = start_health_server(self.health_handler, health_port)
         self.running = False
@@ -130,14 +128,25 @@ class Orchestrator:
             drop = detect_unusual_drop(stock_data)
             sentiment = sentiment_analysis(news_data)
             events = classify_events(news_data)
-            impact = estimate_impact(events, sentiment)
+            impact = estimate_impact(sentiment, events)
+
+            logger.info(json.dumps(
+                {
+                    "message": "Data fetched and analyzed",
+                    "ticker": ticker,
+                    "drop": drop,
+                    "avg_sentiment": sentiment,
+                    "most_common_event": events,
+                    "impact": impact
+                }
+            ))
 
             # Prepare processed data
             processed_data = {
                 "ticker": ticker,
                 "drop": drop,
-                "sentiment": sentiment,
-                "events": events,
+                "avg_sentiment": sentiment,
+                "most_common_event": events,
                 "impact": impact,
                 "fundamentals": fundamental_data,
                 "stock_data": stock_data
@@ -152,7 +161,6 @@ class Orchestrator:
                 self.health_handler.increment_signals()
 
             logger.info(json.dumps({
-                "level": "INFO",
                 "message": "Ticker processed successfully",
                 "ticker": ticker,
                 "signals_generated": len(signals) if signals else 0
@@ -205,7 +213,7 @@ class Orchestrator:
         with self._lock:
             for signal in signals:
                 try:
-                    self.trading_view.execute_signal(signal)
+                    self.trading_view.execute_signals(signal)
                     logger.info(json.dumps({
                         "level": "INFO",
                         "message": "Signal executed",

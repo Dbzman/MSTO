@@ -32,7 +32,6 @@ class SimpleVolatilityStrategy(Strategy):
         self.position_size = position_size
         
         logger.info(json.dumps({
-            "level": "INFO",
             "message": "Initialized SimpleVolatilityStrategy",
             "strategy": name,
             "min_impact_threshold": min_impact_threshold,

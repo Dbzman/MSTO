@@ -21,7 +21,7 @@ wheels/
 *.egg
 
 # Environment variables
-.env.local
+.env
 .env.*.local
 
 # IDE

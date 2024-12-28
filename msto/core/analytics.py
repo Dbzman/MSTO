@@ -5,6 +5,9 @@ from nltk.sentiment import SentimentIntensityAnalyzer
 import nltk
 from collections import Counter
 import re
+import logging
+
+logger = logging.getLogger(__name__)
 
 # Download required NLTK data
 try:
@@ -13,16 +16,16 @@ except LookupError:
     nltk.download('vader_lexicon')
 
 def detect_unusual_drop(data: pd.DataFrame) -> float:
-    returns = data['Close'].pct_change() * 100
+    returns = data['Returns'] * 100
     if len(returns.dropna()) < 10:
-        return None
+        return 0.0
     recent_return = returns.iloc[-1]
     mu = returns.mean()
     sigma = returns.std()
     threshold = mu - 2 * sigma
     if recent_return < threshold:
         return float(recent_return)
-    return None
+    return 0.0
 
 def sentiment_analysis(articles: List[Dict[str, Any]]) -> float:
     if not articles:
